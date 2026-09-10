@@ -1,4 +1,4 @@
-const GLOBAL_CLOUD_ENDPOINT = 'https://api.restful-api.dev/objects/ff808181a067127101a08a4bbda261eb';
+const GLOBAL_CLOUD_ENDPOINT = 'https://api.restful-api.dev/objects/ff808181a067127101a08a573fc26212';
 
 let memoryStore = {
   survey_requests: [],
@@ -8,12 +8,12 @@ let memoryStore = {
 
 const mergeArrays = (listA = [], listB = []) => {
   const map = new Map();
-  for (const item of listA) {
+  for (const item of listA || []) {
     if (!item) continue;
     const k = item.id || (item.title + '_' + item.created_at) || JSON.stringify(item);
     map.set(String(k), item);
   }
-  for (const item of listB) {
+  for (const item of listB || []) {
     if (!item) continue;
     const k = item.id || (item.title + '_' + item.created_at) || JSON.stringify(item);
     if (!map.has(String(k))) {
@@ -33,19 +33,18 @@ async function getStore(env) {
     try {
       const data = await env.SURVEY_KV.get('vku_store', { type: 'json' });
       if (data && (Array.isArray(data.survey_requests) || Array.isArray(data.inspections))) {
-        memoryStore = {
-          survey_requests: data.survey_requests || [],
-          inspections: data.inspections || [],
-          users: data.users || {}
-        };
-        return memoryStore;
+        memoryStore.survey_requests = mergeArrays(memoryStore.survey_requests, data.survey_requests || []);
+        memoryStore.inspections = mergeArrays(memoryStore.inspections, data.inspections || []);
+        memoryStore.users = mergeUsers(memoryStore.users, data.users || {});
       }
     } catch (e) {}
   }
 
   // 2. Try Global Persistent Endpoint
   try {
-    const res = await fetch(GLOBAL_CLOUD_ENDPOINT);
+    const res = await fetch(GLOBAL_CLOUD_ENDPOINT, {
+      headers: { 'User-Agent': 'VKU-Survey-PWA/2.0' }
+    });
     if (res.ok) {
       const remote = await res.json();
       if (remote && remote.data) {
@@ -73,9 +72,12 @@ async function saveStore(env, store) {
   try {
     await fetch(GLOBAL_CLOUD_ENDPOINT, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'VKU-Survey-PWA/2.0'
+      },
       body: JSON.stringify({
-        name: 'VKU_SURVEY_GLOBAL_STORE_V1',
+        name: 'VKU_FIELD_SURVEY_MASTER_STORE_2026',
         data: store
       })
     });

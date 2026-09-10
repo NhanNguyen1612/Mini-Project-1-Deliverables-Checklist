@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { db } from './db';
 
-const GLOBAL_CLOUD_FALLBACK = 'https://api.restful-api.dev/objects/ff808181a067127101a08a4bbda261eb';
+const GLOBAL_CLOUD_FALLBACK = 'https://api.restful-api.dev/objects/ff808181a067127101a08a573fc26212';
 
 const defaultUrl = import.meta.env.VITE_SUPABASE_URL || localStorage.getItem('vku_supabase_url') || 'https://your-project.supabase.co';
 const defaultKey = import.meta.env.VITE_SUPABASE_ANON_KEY || localStorage.getItem('vku_supabase_key') || 'your-anon-key';
@@ -114,12 +114,12 @@ const saveLocalStorageBackup = (key, items) => {
 
 const mergeItems = (primaryList = [], secondaryList = []) => {
   const map = new Map();
-  for (const item of primaryList) {
+  for (const item of primaryList || []) {
     if (!item) continue;
     const k = item.id || (item.title + '_' + item.created_at) || JSON.stringify(item);
     map.set(String(k), item);
   }
-  for (const item of secondaryList) {
+  for (const item of secondaryList || []) {
     if (!item) continue;
     const k = item.id || (item.title + '_' + item.created_at) || JSON.stringify(item);
     if (!map.has(String(k))) {
@@ -142,31 +142,35 @@ const notifySync = (type) => {
 
 const sendCloudRelaySync = async (payload) => {
   if (!navigator.onLine) return;
+
+  // 1. Send to Cloudflare Pages Functions route
   try {
     await fetch('/api/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-  } catch (e) {
-    // Direct Fallback if /api/sync fails
-    try {
-      if (payload.type === 'FULL_SYNC' && payload.payload) {
-        await fetch(GLOBAL_CLOUD_FALLBACK, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: 'VKU_SURVEY_GLOBAL_STORE_V1',
-            data: {
-              survey_requests: payload.payload.survey_requests || [],
-              inspections: payload.payload.inspections || [],
-              users: payload.payload.users || getRegisteredUsers()
-            }
-          })
-        });
-      }
-    } catch (err) {}
-  }
+  } catch (e) {}
+
+  // 2. Direct Push to Master Cloud Store for 100% instant reliability
+  try {
+    const localRequests = getLocalStorageBackup('vku_shared_survey_requests');
+    const localInspections = getLocalStorageBackup('vku_shared_inspections');
+    const localUsers = getRegisteredUsers();
+
+    await fetch(GLOBAL_CLOUD_FALLBACK, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'VKU_FIELD_SURVEY_MASTER_STORE_2026',
+        data: {
+          survey_requests: localRequests,
+          inspections: localInspections,
+          users: localUsers
+        }
+      })
+    });
+  } catch (e) {}
 };
 
 export const sendFullCloudSync = async (isTeacherUpdate = false) => {
@@ -197,69 +201,84 @@ export const sendFullCloudSync = async (isTeacherUpdate = false) => {
 
 export const pullCloudRelaySync = async () => {
   if (!navigator.onLine) return;
+
+  let store = { survey_requests: [], inspections: [], users: {} };
+  let fetchSucceeded = false;
+
+  // 1. Try pulling from Cloudflare Pages Function
   try {
-    let store = null;
-    try {
-      const res = await fetch('/api/sync');
-      if (res.ok) store = await res.json();
-    } catch (err) {}
-
-    if (!store || (!store.survey_requests && !store.inspections)) {
-      // Direct Fallback
-      const res = await fetch(GLOBAL_CLOUD_FALLBACK);
-      if (res.ok) {
-        const remote = await res.json();
-        if (remote && remote.data) store = remote.data;
+    const res = await fetch('/api/sync');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && (Array.isArray(data.survey_requests) || Array.isArray(data.inspections))) {
+        store.survey_requests = mergeItems(data.survey_requests, store.survey_requests);
+        store.inspections = mergeItems(data.inspections, store.inspections);
+        if (data.users) store.users = { ...store.users, ...data.users };
+        fetchSucceeded = true;
       }
     }
+  } catch (err) {}
 
-    if (!store) return;
-
-    let updated = false;
-
-    // 1. Sync Registered Users
-    if (store.users && typeof store.users === 'object' && Object.keys(store.users).length > 0) {
-      const currentUsers = getRegisteredUsers();
-      const mergedUsers = { ...currentUsers, ...store.users };
-      if (Object.keys(mergedUsers).length !== Object.keys(currentUsers).length) {
-        saveRegisteredUsersLocal(mergedUsers);
-        for (const [em, u] of Object.entries(mergedUsers)) {
-          if (u.role) saveUserRole(em, u.role);
-        }
-        updated = true;
+  // 2. Direct Pull from Master Cloud Endpoint for 100% guarantee across devices
+  try {
+    const res = await fetch(GLOBAL_CLOUD_FALLBACK);
+    if (res.ok) {
+      const remote = await res.json();
+      if (remote && remote.data) {
+        store.survey_requests = mergeItems(remote.data.survey_requests, store.survey_requests);
+        store.inspections = mergeItems(remote.data.inspections, store.inspections);
+        if (remote.data.users) store.users = { ...store.users, ...remote.data.users };
+        fetchSucceeded = true;
       }
     }
+  } catch (err) {}
 
-    // 2. Sync Survey Requests
-    if (Array.isArray(store.survey_requests) && store.survey_requests.length > 0) {
-      const currentLocal = getLocalStorageBackup('vku_shared_survey_requests');
-      const merged = mergeItems(store.survey_requests, currentLocal);
-      saveLocalStorageBackup('vku_shared_survey_requests', merged);
-      for (const req of merged) {
-        try { await db.survey_requests.put(req); } catch (e) {}
-      }
-      if (merged.length !== currentLocal.length || store.survey_requests.length > currentLocal.length) {
-        updated = true;
-      }
-    }
+  if (!fetchSucceeded) return;
 
-    // 3. Sync Inspections
-    if (Array.isArray(store.inspections) && store.inspections.length > 0) {
-      const currentLocal = getLocalStorageBackup('vku_shared_inspections');
-      const merged = mergeItems(store.inspections, currentLocal);
-      saveLocalStorageBackup('vku_shared_inspections', merged);
-      for (const insp of merged) {
-        try { await db.cloud_inspections.put(insp); } catch (e) {}
-      }
-      if (merged.length !== currentLocal.length || store.inspections.length > currentLocal.length) {
-        updated = true;
-      }
-    }
+  let updated = false;
 
-    if (updated) {
-      notifySync('CLOUD_SYNC_UPDATED');
+  // 1. Sync Registered Users
+  if (store.users && typeof store.users === 'object' && Object.keys(store.users).length > 0) {
+    const currentUsers = getRegisteredUsers();
+    const mergedUsers = { ...currentUsers, ...store.users };
+    if (Object.keys(mergedUsers).length !== Object.keys(currentUsers).length) {
+      saveRegisteredUsersLocal(mergedUsers);
+      for (const [em, u] of Object.entries(mergedUsers)) {
+        if (u.role) saveUserRole(em, u.role);
+      }
+      updated = true;
     }
-  } catch (e) {}
+  }
+
+  // 2. Sync Survey Requests
+  if (Array.isArray(store.survey_requests) && store.survey_requests.length > 0) {
+    const currentLocal = getLocalStorageBackup('vku_shared_survey_requests');
+    const merged = mergeItems(store.survey_requests, currentLocal);
+    saveLocalStorageBackup('vku_shared_survey_requests', merged);
+    for (const req of merged) {
+      try { await db.survey_requests.put(req); } catch (e) {}
+    }
+    if (merged.length !== currentLocal.length) {
+      updated = true;
+    }
+  }
+
+  // 3. Sync Inspections
+  if (Array.isArray(store.inspections) && store.inspections.length > 0) {
+    const currentLocal = getLocalStorageBackup('vku_shared_inspections');
+    const merged = mergeItems(store.inspections, currentLocal);
+    saveLocalStorageBackup('vku_shared_inspections', merged);
+    for (const insp of merged) {
+      try { await db.cloud_inspections.put(insp); } catch (e) {}
+    }
+    if (merged.length !== currentLocal.length) {
+      updated = true;
+    }
+  }
+
+  if (updated) {
+    notifySync('CLOUD_SYNC_UPDATED');
+  }
 };
 
 if (typeof window !== 'undefined') {
