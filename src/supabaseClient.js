@@ -15,37 +15,91 @@ const initWebSocketRelay = () => {
   if (typeof window === 'undefined' || !window.WebSocket) return;
   try {
     globalWs = new WebSocket('wss://free.websocket.in/vku_survey_instant_channel_2026');
-    globalWs.onmessage = () => {
-      pullCloudRelaySync();
+    globalWs.onmessage = async (evt) => {
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg && msg.action) {
+          await handleIncomingWsPayload(msg);
+        }
+      } catch (e) {}
     };
     globalWs.onclose = () => {
       setTimeout(initWebSocketRelay, 3000);
     };
   } catch (e) {}
 };
+
+const handleIncomingWsPayload = async (msg) => {
+  if (!msg || !msg.action) return;
+  let updated = false;
+
+  if (msg.action === 'ADD_REQUEST' && msg.payload) {
+    const req = msg.payload;
+    try { await db.survey_requests.put(req); } catch (e) {}
+    const localReqs = getLocalStorageBackup('vku_shared_survey_requests');
+    const merged = mergeItems([req], localReqs);
+    saveLocalStorageBackup('vku_shared_survey_requests', merged);
+    updated = true;
+  } else if (msg.action === 'DELETE_REQUEST' && msg.id) {
+    try { await db.survey_requests.delete(msg.id); } catch (e) {}
+    let localReqs = getLocalStorageBackup('vku_shared_survey_requests');
+    localReqs = localReqs.filter(r => String(r.id) !== String(msg.id));
+    saveLocalStorageBackup('vku_shared_survey_requests', localReqs);
+    updated = true;
+  } else if (msg.action === 'ADD_INSPECTION' && msg.payload) {
+    const insp = msg.payload;
+    try { await db.cloud_inspections.put(insp); } catch (e) {}
+    const localInsps = getLocalStorageBackup('vku_shared_inspections');
+    const merged = mergeItems([insp], localInsps);
+    saveLocalStorageBackup('vku_shared_inspections', merged);
+    updated = true;
+  } else if (msg.action === 'DELETE_INSPECTION' && msg.id) {
+    try { await db.cloud_inspections.delete(msg.id); } catch (e) {}
+    let localInsps = getLocalStorageBackup('vku_shared_inspections');
+    localInsps = localInsps.filter(i => String(i.id) !== String(msg.id));
+    saveLocalStorageBackup('vku_shared_inspections', localInsps);
+    updated = true;
+  }
+
+  if (updated) {
+    notifyLocalOnly(msg.action);
+  }
+};
+
+if (syncChannel) {
+  syncChannel.onmessage = (evt) => {
+    if (evt.data && evt.data.action) {
+      handleIncomingWsPayload(evt.data);
+    }
+  };
+}
+
 initWebSocketRelay();
 
-const broadcastInstantWs = (type) => {
+const broadcastInstantWs = (action, payload = null, id = null) => {
+  const msgObj = { action, payload, id, timestamp: Date.now() };
+  if (syncChannel) {
+    try { syncChannel.postMessage(msgObj); } catch (e) {}
+  }
   if (globalWs && globalWs.readyState === 1) {
     try {
-      globalWs.send(JSON.stringify({ type, timestamp: Date.now() }));
+      globalWs.send(JSON.stringify(msgObj));
     } catch (e) {}
   }
 };
 
-const notifySync = (type) => {
-  if (syncChannel) {
-    try {
-      syncChannel.postMessage({ type });
-    } catch (e) {}
-  }
+const notifyLocalOnly = (type) => {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('storage'));
     try {
       localStorage.setItem('vku_last_sync_trigger', Date.now().toString());
     } catch (e) {}
   }
-  broadcastInstantWs(type);
+};
+
+const notifySync = (type, payload = null, id = null) => {
+  notifyLocalOnly(type);
+  broadcastInstantWs(type, payload, id);
 };
 
 export const getRegisteredUsers = () => {
@@ -456,25 +510,29 @@ export const supabase = {
           }
         } else if (table === 'survey_requests') {
           const currentLocal = getLocalStorageBackup('vku_shared_survey_requests');
+          let lastCleanRow = null;
           for (const row of rows) {
             const cleanRow = { ...row };
             if (!cleanRow.id) cleanRow.id = Date.now() + Math.floor(Math.random() * 1000);
             try { await db.survey_requests.put(cleanRow); } catch (e) {}
             currentLocal.push(cleanRow);
+            lastCleanRow = cleanRow;
           }
           saveLocalStorageBackup('vku_shared_survey_requests', currentLocal);
-          notifySync('REQUEST_ADDED');
+          notifySync('ADD_REQUEST', lastCleanRow);
           sendFullCloudSync(true).catch(() => {});
         } else if (table === 'inspections') {
           const currentLocal = getLocalStorageBackup('vku_shared_inspections');
+          let lastCleanRow = null;
           for (const row of rows) {
             const cleanRow = { ...row };
             if (!cleanRow.id) cleanRow.id = Date.now() + Math.floor(Math.random() * 1000);
             try { await db.cloud_inspections.put(cleanRow); } catch (e) {}
             currentLocal.push(cleanRow);
+            lastCleanRow = cleanRow;
           }
           saveLocalStorageBackup('vku_shared_inspections', currentLocal);
-          notifySync('INSPECTION_ADDED');
+          notifySync('ADD_INSPECTION', lastCleanRow);
           sendFullCloudSync(false).catch(() => {});
         }
         return { data: rows, error: null };
@@ -494,7 +552,7 @@ export const supabase = {
               currentBackup = currentBackup.filter(i => String(i[field]) !== String(val));
               saveLocalStorageBackup('vku_shared_survey_requests', currentBackup);
               sendCloudRelaySync({ type: 'DELETE_REQUEST', id: val }).catch(() => {});
-              notifySync('REQUEST_DELETED');
+              notifySync('DELETE_REQUEST', null, val);
               sendFullCloudSync(true).catch(() => {});
             } else if (table === 'inspections') {
               try {
@@ -508,7 +566,7 @@ export const supabase = {
               currentBackup = currentBackup.filter(i => String(i[field]) !== String(val));
               saveLocalStorageBackup('vku_shared_inspections', currentBackup);
               sendCloudRelaySync({ type: 'DELETE_INSPECTION', id: val }).catch(() => {});
-              notifySync('INSPECTION_DELETED');
+              notifySync('DELETE_INSPECTION', null, val);
               sendFullCloudSync(false).catch(() => {});
             }
             return { error: null };
