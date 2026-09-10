@@ -1,40 +1,47 @@
-CREATE TABLE IF NOT EXISTS profiles (
-  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+-- 1. Bảng lưu thông tin người dùng & vai trò (Role)
+CREATE TABLE IF NOT EXISTS public.profiles (
+  id TEXT PRIMARY KEY,
   email TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('student', 'teacher')),
+  role TEXT NOT NULL DEFAULT 'student',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS inspections (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+-- 2. Bảng lưu Yêu cầu Khảo sát từ Giảng viên
+CREATE TABLE IF NOT EXISTS public.survey_requests (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  teacher_email TEXT NOT NULL,
+  title TEXT NOT NULL,
+  facility_name TEXT NOT NULL,
+  categories JSONB DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 3. Bảng lưu Bài Báo cáo Khảo sát từ Sinh viên
+CREATE TABLE IF NOT EXISTS public.inspections (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  request_id TEXT,
+  user_id TEXT,
   user_email TEXT NOT NULL,
   facility_name TEXT NOT NULL,
-  description TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('good', 'maintenance', 'danger')),
+  description TEXT,
+  category_ratings JSONB DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'good',
   image_url TEXT,
+  latitude DOUBLE PRECISION,
+  longitude DOUBLE PRECISION,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE inspections ENABLE ROW LEVEL SECURITY;
+-- Bật Row Level Security (RLS) & Cho phép đọc/ghi công khai (Full Permissive Access cho PWA)
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.survey_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.inspections ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Allow public read access to profiles" ON profiles
-  FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public Profiles Access" ON public.profiles;
+CREATE POLICY "Public Profiles Access" ON public.profiles FOR ALL USING (true) WITH CHECK (true);
 
-CREATE POLICY "Allow users to insert their own profile" ON profiles
-  FOR INSERT WITH CHECK (auth.uid() = id);
+DROP POLICY IF EXISTS "Public Survey Requests Access" ON public.survey_requests;
+CREATE POLICY "Public Survey Requests Access" ON public.survey_requests FOR ALL USING (true) WITH CHECK (true);
 
-CREATE POLICY "Students can view own inspections" ON inspections
-  FOR SELECT USING (
-    auth.uid() = user_id OR 
-    EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'teacher')
-  );
-
-CREATE POLICY "Students can insert own inspections" ON inspections
-  FOR INSERT WITH CHECK (auth.uid() = user_id);
-
-CREATE POLICY "Teachers can delete any inspection" ON inspections
-  FOR DELETE USING (
-    EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'teacher')
-  );
+DROP POLICY IF EXISTS "Public Inspections Access" ON public.inspections;
+CREATE POLICY "Public Inspections Access" ON public.inspections FOR ALL USING (true) WITH CHECK (true);

@@ -8,9 +8,23 @@ const defaultKey = import.meta.env.VITE_SUPABASE_ANON_KEY || localStorage.getIte
 
 export const isPlaceholderUrl = (url) => !url || url.includes('your-project.supabase.co');
 
-const realClient = isPlaceholderUrl(defaultUrl) ? null : createClient(defaultUrl, defaultKey);
+export const realClient = isPlaceholderUrl(defaultUrl) ? null : createClient(defaultUrl, defaultKey);
 
 const syncChannel = typeof window !== 'undefined' && window.BroadcastChannel ? new BroadcastChannel('vku_survey_sync_channel') : null;
+
+// Subscribe to Supabase Realtime WebSockets if real Client is configured
+if (realClient) {
+  try {
+    realClient
+      .channel('public:realtime')
+      .on('postgres_changes', { event: '*', schema: 'public' }, () => {
+        notifySync('CLOUD_SYNC_UPDATED');
+      })
+      .subscribe();
+  } catch (e) {
+    console.warn('Realtime subscription error:', e);
+  }
+}
 
 export const getRegisteredUsers = () => {
   try {
@@ -34,10 +48,16 @@ export const registerLocalUser = async (email, role, password) => {
   saveRegisteredUsersLocal(local);
   saveUserRole(email, role);
 
-  await sendCloudRelaySync({
-    type: 'REGISTER_USER',
-    payload: { email, role, password }
-  });
+  if (realClient) {
+    try {
+      await realClient.from('profiles').insert([{ id: 'user-' + lowerEmail, email: lowerEmail, role }]);
+    } catch (e) {}
+  } else {
+    await sendCloudRelaySync({
+      type: 'REGISTER_USER',
+      payload: { email, role, password }
+    });
+  }
   notifySync('PROFILE_UPDATED');
 };
 
@@ -140,8 +160,8 @@ const notifySync = (type) => {
 
 const sendCloudRelaySync = async (payload) => {
   if (!navigator.onLine) return;
+  if (realClient) return; // If real Supabase client is connected, direct SQL handles sync
 
-  // 1. Fetch current remote cloud state FIRST so we merge and NEVER overwrite other devices' data!
   let remoteRequests = [];
   let remoteInspections = [];
   let remoteUsers = {};
@@ -158,22 +178,18 @@ const sendCloudRelaySync = async (payload) => {
     }
   } catch (err) {}
 
-  // 2. Read local items
   const localRequests = getLocalStorageBackup('vku_shared_survey_requests');
   const localInspections = getLocalStorageBackup('vku_shared_inspections');
   const localUsers = getRegisteredUsers();
 
-  // 3. Merge remote + local
   const mergedRequests = mergeItems(remoteRequests, localRequests);
   const mergedInspections = mergeItems(remoteInspections, localInspections);
   const mergedUsers = { ...remoteUsers, ...localUsers };
 
-  // Save merged state locally
   saveLocalStorageBackup('vku_shared_survey_requests', mergedRequests);
   saveLocalStorageBackup('vku_shared_inspections', mergedInspections);
   saveRegisteredUsersLocal(mergedUsers);
 
-  // 4. Push merged state to Cloudflare Pages Functions route
   try {
     await fetch('/api/sync', {
       method: 'POST',
@@ -189,7 +205,6 @@ const sendCloudRelaySync = async (payload) => {
     });
   } catch (e) {}
 
-  // 5. Push merged state directly to Master Cloud Store
   try {
     await fetch(GLOBAL_CLOUD_FALLBACK, {
       method: 'PUT',
@@ -210,6 +225,8 @@ const sendCloudRelaySync = async (payload) => {
 
 export const sendFullCloudSync = async (isTeacherUpdate = false) => {
   if (!navigator.onLine) return;
+  if (realClient) return;
+
   try {
     const localRequests = getLocalStorageBackup('vku_shared_survey_requests');
     const localInspections = getLocalStorageBackup('vku_shared_inspections');
@@ -236,11 +253,11 @@ export const sendFullCloudSync = async (isTeacherUpdate = false) => {
 
 export const pullCloudRelaySync = async () => {
   if (!navigator.onLine) return;
+  if (realClient) return;
 
   let store = { survey_requests: [], inspections: [], users: {} };
   let fetchSucceeded = false;
 
-  // 1. Direct Pull from Master Cloud Endpoint
   try {
     const res = await fetch(GLOBAL_CLOUD_FALLBACK);
     if (res.ok) {
@@ -254,7 +271,6 @@ export const pullCloudRelaySync = async () => {
     }
   } catch (err) {}
 
-  // 2. Pull from Cloudflare Pages Function route
   try {
     const res = await fetch('/api/sync');
     if (res.ok) {
@@ -272,7 +288,6 @@ export const pullCloudRelaySync = async () => {
 
   let updated = false;
 
-  // 1. Sync Registered Users
   if (store.users && typeof store.users === 'object' && Object.keys(store.users).length > 0) {
     const currentUsers = getRegisteredUsers();
     const currentStr = JSON.stringify(currentUsers);
@@ -287,7 +302,6 @@ export const pullCloudRelaySync = async () => {
     }
   }
 
-  // 2. Sync Survey Requests
   if (Array.isArray(store.survey_requests) && store.survey_requests.length > 0) {
     const currentLocal = getLocalStorageBackup('vku_shared_survey_requests');
     const currentStr = JSON.stringify(currentLocal);
@@ -302,7 +316,6 @@ export const pullCloudRelaySync = async () => {
     }
   }
 
-  // 3. Sync Inspections
   if (Array.isArray(store.inspections) && store.inspections.length > 0) {
     const currentLocal = getLocalStorageBackup('vku_shared_inspections');
     const currentStr = JSON.stringify(currentLocal);
