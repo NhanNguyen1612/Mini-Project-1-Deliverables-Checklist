@@ -28,6 +28,16 @@ const mergeUsers = (usersA = {}, usersB = {}) => {
 const KEYVAL_URL = 'https://api.keyval.org/get/vku_pwa_survey_store_2026';
 const KEYVAL_SET_BASE = 'https://api.keyval.org/set/vku_pwa_survey_store_2026/';
 
+const noCacheHeaders = {
+  'Content-Type': 'application/json; charset=utf-8',
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0',
+  'Pragma': 'no-cache',
+  'Expires': '0'
+};
+
 async function getStore(env) {
   // Try Cloudflare KV if bound
   if (env && env.SURVEY_KV) {
@@ -42,23 +52,21 @@ async function getStore(env) {
     } catch (e) {}
   }
 
-  // Persistent keyval store sync across edge isolates (only fetch if memoryStore is empty)
-  if (memoryStore.survey_requests.length === 0 && memoryStore.inspections.length === 0) {
-    try {
-      const res = await fetch(KEYVAL_URL);
-      if (res.ok) {
-        const json = await res.json();
-        if (json && json.val) {
-          const parsed = JSON.parse(json.val);
-          if (parsed && (Array.isArray(parsed.survey_requests) || Array.isArray(parsed.inspections))) {
-            memoryStore.survey_requests = mergeArrays(parsed.survey_requests || [], memoryStore.survey_requests);
-            memoryStore.inspections = mergeArrays(parsed.inspections || [], memoryStore.inspections);
-            memoryStore.users = mergeUsers(parsed.users || {}, memoryStore.users);
-          }
+  // Persistent keyval store sync across edge isolates
+  try {
+    const res = await fetch(KEYVAL_URL, { headers: { 'Cache-Control': 'no-cache' } });
+    if (res.ok) {
+      const json = await res.json();
+      if (json && json.val) {
+        const parsed = JSON.parse(json.val);
+        if (parsed && (Array.isArray(parsed.survey_requests) || Array.isArray(parsed.inspections))) {
+          memoryStore.survey_requests = mergeArrays(parsed.survey_requests || [], memoryStore.survey_requests);
+          memoryStore.inspections = mergeArrays(parsed.inspections || [], memoryStore.inspections);
+          memoryStore.users = mergeUsers(parsed.users || {}, memoryStore.users);
         }
       }
-    } catch (e) {}
-  }
+    }
+  } catch (e) {}
 
   return memoryStore;
 }
@@ -73,10 +81,10 @@ async function saveStore(env, store) {
     } catch (e) {}
   }
 
-  // Non-blocking persistent keyval store save
+  // Persistent keyval store save
   try {
     const encoded = encodeURIComponent(JSON.stringify(store));
-    fetch(KEYVAL_SET_BASE + encoded).catch(() => {});
+    await fetch(KEYVAL_SET_BASE + encoded);
   } catch (e) {}
 }
 
@@ -84,12 +92,7 @@ export async function onRequestGet(context) {
   const store = await getStore(context.env);
   return new Response(JSON.stringify(store), {
     status: 200,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
-      'Access-Control-Allow-Headers': 'Content-Type'
-    }
+    headers: noCacheHeaders
   });
 }
 
@@ -133,20 +136,12 @@ export async function onRequestPost(context) {
 
     return new Response(JSON.stringify({ success: true, store }), {
       status: 200,
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
-        'Access-Control-Allow-Headers': 'Content-Type'
-      }
+      headers: noCacheHeaders
     });
   } catch (e) {
     return new Response(JSON.stringify({ error: e.message }), {
       status: 500,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
-      }
+      headers: noCacheHeaders
     });
   }
 }
@@ -154,10 +149,6 @@ export async function onRequestPost(context) {
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
-      'Access-Control-Allow-Headers': 'Content-Type'
-    }
+    headers: noCacheHeaders
   });
 }

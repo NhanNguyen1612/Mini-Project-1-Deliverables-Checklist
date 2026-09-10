@@ -179,9 +179,10 @@ const sendCloudRelaySync = async (payload) => {
   const localUsers = getRegisteredUsers();
 
   try {
-    await fetch('/api/sync', {
+    await fetch('/api/sync?t=' + Date.now(), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
+      cache: 'no-store',
       body: JSON.stringify({
         type: 'FULL_SYNC',
         payload: {
@@ -232,7 +233,7 @@ export const pullCloudRelaySync = async () => {
   let fetchSucceeded = false;
 
   try {
-    const res = await fetch('/api/sync');
+    const res = await fetch('/api/sync?t=' + Date.now(), { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } });
     if (res.ok) {
       const data = await res.json();
       if (data && (Array.isArray(data.survey_requests) || Array.isArray(data.inspections))) {
