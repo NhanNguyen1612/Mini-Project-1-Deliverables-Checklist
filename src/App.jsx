@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase, getUserRoleByEmail } from './supabaseClient';
+import { supabase, getUserRoleByEmail, saveUserRole, pullCloudRelaySync } from './supabaseClient';
 import { db } from './db';
 import Login from './components/Login';
 import StudentForm from './components/StudentForm';
@@ -15,9 +15,11 @@ export default function App() {
 
   useEffect(() => {
     checkUserSession();
+    pullCloudRelaySync();
 
     const handleOnline = async () => {
       setIsOnline(true);
+      await pullCloudRelaySync();
       await triggerAutoSync();
     };
     const handleOffline = () => setIsOnline(false);
@@ -35,21 +37,23 @@ export default function App() {
     const { data: { session } } = await supabase.auth.getSession();
     if (session?.user) {
       setUser(session.user);
-      let detectedRole = sessionStorage.getItem('vku_active_session_role') ||
-                         localStorage.getItem('vku_active_session_role') ||
-                         localStorage.getItem('vku_current_user_role_' + session.user.email) ||
-                         getUserRoleByEmail(session.user.email);
+      let activeRole = sessionStorage.getItem('vku_active_session_role') ||
+                        localStorage.getItem('vku_active_session_role');
 
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', session.user.id)
-        .single();
-      if (profile?.role) detectedRole = profile.role;
+      if (!activeRole) {
+        activeRole = localStorage.getItem('vku_current_user_role_' + session.user.email) ||
+                     getUserRoleByEmail(session.user.email);
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', session.user.id)
+          .single();
+        if (profile?.role) activeRole = profile.role;
+      }
 
-      setRole(detectedRole);
-      sessionStorage.setItem('vku_active_session_role', detectedRole);
-      localStorage.setItem('vku_active_session_role', detectedRole);
+      setRole(activeRole);
+      sessionStorage.setItem('vku_active_session_role', activeRole);
+      localStorage.setItem('vku_active_session_role', activeRole);
     }
     setLoading(false);
   };
@@ -58,6 +62,7 @@ export default function App() {
     if (!navigator.onLine) return;
     setSyncing(true);
     try {
+      await pullCloudRelaySync();
       const offlineItems = await db.offline_inspections.toArray();
       if (offlineItems.length > 0) {
         for (const item of offlineItems) {
@@ -80,6 +85,7 @@ export default function App() {
     setRole(userRole);
     sessionStorage.setItem('vku_active_session_role', userRole);
     localStorage.setItem('vku_active_session_role', userRole);
+    if (userObj?.email) saveUserRole(userObj.email, userRole);
     if (navigator.onLine) triggerAutoSync();
   };
 
@@ -96,6 +102,9 @@ export default function App() {
     setRole(newRole);
     sessionStorage.setItem('vku_active_session_role', newRole);
     localStorage.setItem('vku_active_session_role', newRole);
+    if (user?.email) {
+      saveUserRole(user.email, newRole);
+    }
   };
 
   if (loading) {
@@ -131,15 +140,21 @@ export default function App() {
 
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2 text-xs">
-              {isOnline ? (
-                <span className="flex items-center gap-1 text-emerald-400 font-medium">
-                  <Wifi size={14} /> Online
-                </span>
-              ) : (
-                <span className="flex items-center gap-1 text-amber-300 font-medium">
-                  <WifiOff size={14} /> Offline
-                </span>
-              )}
+              <button
+                onClick={triggerAutoSync}
+                className="hover:underline flex items-center gap-1 cursor-pointer"
+                title="Bấm để đồng bộ dữ liệu thủ công"
+              >
+                {isOnline ? (
+                  <span className="flex items-center gap-1 text-emerald-400 font-medium">
+                    <Wifi size={14} /> Online
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-amber-300 font-medium">
+                    <WifiOff size={14} /> Offline
+                  </span>
+                )}
+              </button>
               {syncing && <RefreshCw size={14} className="animate-spin text-white" />}
             </div>
 
@@ -163,7 +178,7 @@ export default function App() {
       </main>
 
       <footer className="bg-white border-t border-slate-200 py-3 text-center text-xs text-slate-500">
-        VKU Field Survey PWA &copy; 2026 — Offline-First Architecture
+        VKU Field Survey PWA &copy; 2026 — Offline-First & Cloud-Synced Architecture
       </footer>
     </div>
   );

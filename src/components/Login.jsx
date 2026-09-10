@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { supabase, updateSupabaseConfig, saveUserRole, getUserRoleByEmail, registerLocalUser } from '../supabaseClient';
-import { LogIn, UserPlus, Settings, Check } from 'lucide-react';
+import { supabase, updateSupabaseConfig, saveUserRole, getUserRoleByEmail, registerLocalUser, pullCloudRelaySync } from '../supabaseClient';
+import { LogIn, UserPlus, Settings, Check, CheckCircle2 } from 'lucide-react';
 
 export default function Login({ onLoginSuccess }) {
   const [email, setEmail] = useState('');
@@ -9,6 +9,7 @@ export default function Login({ onLoginSuccess }) {
   const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
   
   const [showConfig, setShowConfig] = useState(false);
   const [customUrl, setCustomUrl] = useState(localStorage.getItem('vku_supabase_url') || '');
@@ -28,13 +29,14 @@ export default function Login({ onLoginSuccess }) {
     e.preventDefault();
     setLoading(true);
     setErrorMsg('');
+    setSuccessMsg('');
 
     let userObj = null;
     let userRole = role;
 
     try {
       if (isSignUp) {
-        registerLocalUser(email, role, password);
+        await registerLocalUser(email, role, password);
         const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
         if (data?.user) {
@@ -42,8 +44,11 @@ export default function Login({ onLoginSuccess }) {
           sessionStorage.setItem('vku_current_demo_user', JSON.stringify(userObj));
           localStorage.setItem('vku_current_demo_user', JSON.stringify(userObj));
           await supabase.from('profiles').insert([{ id: userObj.id, email, role }]);
+          saveUserRole(email, role);
+          setSuccessMsg('Đăng ký tài khoản thành công! Đang tự động đăng nhập...');
         }
       } else {
+        await pullCloudRelaySync();
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
         if (data?.user) {
@@ -62,7 +67,9 @@ export default function Login({ onLoginSuccess }) {
 
       if (userObj) {
         sessionStorage.setItem('vku_active_session_role', userRole);
+        localStorage.setItem('vku_active_session_role', userRole);
         localStorage.setItem('vku_current_user_role_' + userObj.email, userRole);
+        saveUserRole(userObj.email, userRole);
         onLoginSuccess(userObj, userRole);
       }
     } catch (err) {
@@ -83,6 +90,13 @@ export default function Login({ onLoginSuccess }) {
         {errorMsg && (
           <div className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg border border-red-200">
             {errorMsg}
+          </div>
+        )}
+
+        {successMsg && (
+          <div className="mb-4 p-3 bg-emerald-50 text-emerald-700 text-sm rounded-lg border border-emerald-200 flex items-center gap-2">
+            <CheckCircle2 size={16} />
+            {successMsg}
           </div>
         )}
 
@@ -138,7 +152,11 @@ export default function Login({ onLoginSuccess }) {
         <div className="mt-6 text-center space-y-3">
           <button
             type="button"
-            onClick={() => setIsSignUp(!isSignUp)}
+            onClick={() => {
+              setIsSignUp(!isSignUp);
+              setErrorMsg('');
+              setSuccessMsg('');
+            }}
             className="text-sm text-blue-700 font-medium hover:underline block w-full"
           >
             {isSignUp ? 'Đã có tài khoản? Đăng nhập' : 'Chưa có tài khoản? Đăng ký ngay'}

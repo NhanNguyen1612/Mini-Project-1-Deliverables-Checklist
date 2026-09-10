@@ -1,6 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 import { db } from './db';
 
+const GLOBAL_CLOUD_FALLBACK = 'https://api.restful-api.dev/objects/ff808181a067127101a08a4bbda261eb';
+
 const defaultUrl = import.meta.env.VITE_SUPABASE_URL || localStorage.getItem('vku_supabase_url') || 'https://your-project.supabase.co';
 const defaultKey = import.meta.env.VITE_SUPABASE_ANON_KEY || localStorage.getItem('vku_supabase_key') || 'your-anon-key';
 
@@ -10,7 +12,7 @@ const realClient = isPlaceholderUrl(defaultUrl) ? null : createClient(defaultUrl
 
 const syncChannel = typeof window !== 'undefined' && window.BroadcastChannel ? new BroadcastChannel('vku_survey_sync_channel') : null;
 
-const getRegisteredUsers = () => {
+export const getRegisteredUsers = () => {
   try {
     return JSON.parse(localStorage.getItem('vku_registered_users') || '{}');
   } catch (e) {
@@ -18,17 +20,26 @@ const getRegisteredUsers = () => {
   }
 };
 
-const saveCloudProfile = (email, role, password) => {
-  if (!email) return;
-  const local = getRegisteredUsers();
-  local[email.toLowerCase()] = { email, role, password };
-  localStorage.setItem('vku_registered_users', JSON.stringify(local));
-  saveUserRole(email, role);
-  notifySync('PROFILE_UPDATED');
+const saveRegisteredUsersLocal = (usersObj) => {
+  try {
+    localStorage.setItem('vku_registered_users', JSON.stringify(usersObj));
+  } catch (e) {}
 };
 
-export const registerLocalUser = (email, role, password) => {
-  saveCloudProfile(email, role, password);
+export const registerLocalUser = async (email, role, password) => {
+  if (!email) return;
+  const lowerEmail = email.toLowerCase();
+  const local = getRegisteredUsers();
+  local[lowerEmail] = { email, role, password };
+  saveRegisteredUsersLocal(local);
+  saveUserRole(email, role);
+
+  // Sync user registration to cloud
+  await sendCloudRelaySync({
+    type: 'REGISTER_USER',
+    payload: { email, role, password }
+  });
+  notifySync('PROFILE_UPDATED');
 };
 
 export const getRegisteredUser = (email) => {
@@ -48,14 +59,21 @@ const getSavedRoles = () => {
 export const saveUserRole = (email, role) => {
   if (!email) return;
   const roles = getSavedRoles();
-  roles[email.toLowerCase()] = role;
+  const lower = email.toLowerCase();
+  roles[lower] = role;
   localStorage.setItem('vku_user_roles', JSON.stringify(roles));
+  localStorage.setItem('vku_active_session_role', role);
 };
 
 export const getUserRoleByEmail = (identifier) => {
   if (!identifier) return 'student';
   const roles = getSavedRoles();
   const lower = identifier.toLowerCase();
+
+  // Check active session role override first
+  const activeRole = sessionStorage.getItem('vku_active_session_role') || localStorage.getItem('vku_active_session_role');
+  if (activeRole) return activeRole;
+
   if (roles[lower]) return roles[lower];
 
   const cleanId = lower.replace(/^user-|^demo-|^demo-user-/, '');
@@ -130,7 +148,25 @@ const sendCloudRelaySync = async (payload) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-  } catch (e) {}
+  } catch (e) {
+    // Direct Fallback if /api/sync fails
+    try {
+      if (payload.type === 'FULL_SYNC' && payload.payload) {
+        await fetch(GLOBAL_CLOUD_FALLBACK, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: 'VKU_SURVEY_GLOBAL_STORE_V1',
+            data: {
+              survey_requests: payload.payload.survey_requests || [],
+              inspections: payload.payload.inspections || [],
+              users: payload.payload.users || getRegisteredUsers()
+            }
+          })
+        });
+      }
+    } catch (err) {}
+  }
 };
 
 export const sendFullCloudSync = async (isTeacherUpdate = false) => {
@@ -145,31 +181,57 @@ export const sendFullCloudSync = async (isTeacherUpdate = false) => {
 
     const allRequests = mergeItems(localRequests, dexieReqs);
     const allInspections = mergeItems(localInspections, dexieInsps);
+    const allUsers = getRegisteredUsers();
 
-    await fetch('/api/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'FULL_SYNC',
-        payload: {
-          survey_requests: allRequests,
-          inspections: allInspections,
-          is_teacher_update: isTeacherUpdate
-        }
-      })
+    await sendCloudRelaySync({
+      type: 'FULL_SYNC',
+      payload: {
+        survey_requests: allRequests,
+        inspections: allInspections,
+        users: allUsers,
+        is_teacher_update: isTeacherUpdate
+      }
     });
   } catch (e) {}
 };
 
-const pullCloudRelaySync = async () => {
+export const pullCloudRelaySync = async () => {
   if (!navigator.onLine) return;
   try {
-    const res = await fetch('/api/sync');
-    if (!res.ok) return;
-    const store = await res.json();
+    let store = null;
+    try {
+      const res = await fetch('/api/sync');
+      if (res.ok) store = await res.json();
+    } catch (err) {}
+
+    if (!store || (!store.survey_requests && !store.inspections)) {
+      // Direct Fallback
+      const res = await fetch(GLOBAL_CLOUD_FALLBACK);
+      if (res.ok) {
+        const remote = await res.json();
+        if (remote && remote.data) store = remote.data;
+      }
+    }
+
+    if (!store) return;
+
     let updated = false;
 
-    if (store && Array.isArray(store.survey_requests) && store.survey_requests.length > 0) {
+    // 1. Sync Registered Users
+    if (store.users && typeof store.users === 'object' && Object.keys(store.users).length > 0) {
+      const currentUsers = getRegisteredUsers();
+      const mergedUsers = { ...currentUsers, ...store.users };
+      if (Object.keys(mergedUsers).length !== Object.keys(currentUsers).length) {
+        saveRegisteredUsersLocal(mergedUsers);
+        for (const [em, u] of Object.entries(mergedUsers)) {
+          if (u.role) saveUserRole(em, u.role);
+        }
+        updated = true;
+      }
+    }
+
+    // 2. Sync Survey Requests
+    if (Array.isArray(store.survey_requests) && store.survey_requests.length > 0) {
       const currentLocal = getLocalStorageBackup('vku_shared_survey_requests');
       const merged = mergeItems(store.survey_requests, currentLocal);
       saveLocalStorageBackup('vku_shared_survey_requests', merged);
@@ -181,7 +243,8 @@ const pullCloudRelaySync = async () => {
       }
     }
 
-    if (store && Array.isArray(store.inspections) && store.inspections.length > 0) {
+    // 3. Sync Inspections
+    if (Array.isArray(store.inspections) && store.inspections.length > 0) {
       const currentLocal = getLocalStorageBackup('vku_shared_inspections');
       const merged = mergeItems(store.inspections, currentLocal);
       saveLocalStorageBackup('vku_shared_inspections', merged);
@@ -235,7 +298,8 @@ class MockQueryBuilder {
     if (this.table === 'profiles') {
       const emailCond = this.conditions.find(c => c.field === 'email' || c.field === 'id');
       if (emailCond) {
-        const role = getUserRoleByEmail(emailCond.val);
+        const activeRole = sessionStorage.getItem('vku_active_session_role') || localStorage.getItem('vku_active_session_role');
+        const role = activeRole || getUserRoleByEmail(emailCond.val);
         return { data: this.isSingle ? { role } : [{ role }], error: null };
       }
       return { data: this.isSingle ? null : [], error: null };
@@ -296,7 +360,15 @@ export const supabase = {
       if (realClient) {
         return await realClient.auth.signInWithPassword({ email, password });
       }
-      const registered = getRegisteredUser(email);
+
+      let registered = getRegisteredUser(email);
+
+      // Try pulling cloud users if not found locally
+      if (!registered) {
+        await pullCloudRelaySync();
+        registered = getRegisteredUser(email);
+      }
+
       if (!registered) {
         return {
           data: { user: null },
