@@ -248,7 +248,7 @@ export const pullCloudRelaySync = async () => {
     }
   }
 
-  if (Array.isArray(store.survey_requests) && store.survey_requests.length > 0) {
+  if (Array.isArray(store.survey_requests)) {
     const currentLocal = getLocalStorageBackup('vku_shared_survey_requests');
     const currentStr = JSON.stringify(currentLocal);
     const merged = mergeItems(store.survey_requests, currentLocal);
@@ -262,7 +262,7 @@ export const pullCloudRelaySync = async () => {
     }
   }
 
-  if (Array.isArray(store.inspections) && store.inspections.length > 0) {
+  if (Array.isArray(store.inspections)) {
     const currentLocal = getLocalStorageBackup('vku_shared_inspections');
     const currentStr = JSON.stringify(currentLocal);
     const merged = mergeItems(store.inspections, currentLocal);

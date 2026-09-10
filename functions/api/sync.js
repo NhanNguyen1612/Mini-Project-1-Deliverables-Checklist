@@ -25,6 +25,9 @@ const mergeUsers = (usersA = {}, usersB = {}) => {
   return { ...usersB, ...usersA };
 };
 
+const KEYVAL_URL = 'https://api.keyval.org/get/vku_pwa_survey_store_2026';
+const KEYVAL_SET_BASE = 'https://api.keyval.org/set/vku_pwa_survey_store_2026/';
+
 async function getStore(env) {
   // Try Cloudflare KV if bound
   if (env && env.SURVEY_KV) {
@@ -34,9 +37,26 @@ async function getStore(env) {
         memoryStore.survey_requests = mergeArrays(memoryStore.survey_requests, data.survey_requests || []);
         memoryStore.inspections = mergeArrays(memoryStore.inspections, data.inspections || []);
         memoryStore.users = mergeUsers(memoryStore.users, data.users || {});
+        return memoryStore;
       }
     } catch (e) {}
   }
+
+  // Persistent keyval store sync across edge isolates
+  try {
+    const res = await fetch(KEYVAL_URL);
+    if (res.ok) {
+      const json = await res.json();
+      if (json && json.val) {
+        const parsed = JSON.parse(json.val);
+        if (parsed && (Array.isArray(parsed.survey_requests) || Array.isArray(parsed.inspections))) {
+          memoryStore.survey_requests = mergeArrays(parsed.survey_requests || [], memoryStore.survey_requests);
+          memoryStore.inspections = mergeArrays(parsed.inspections || [], memoryStore.inspections);
+          memoryStore.users = mergeUsers(parsed.users || {}, memoryStore.users);
+        }
+      }
+    }
+  } catch (e) {}
 
   return memoryStore;
 }
@@ -50,6 +70,12 @@ async function saveStore(env, store) {
       await env.SURVEY_KV.put('vku_store', JSON.stringify(store));
     } catch (e) {}
   }
+
+  // Save to persistent keyval store across edge instances
+  try {
+    const encoded = encodeURIComponent(JSON.stringify(store));
+    await fetch(KEYVAL_SET_BASE + encoded);
+  } catch (e) {}
 }
 
 export async function onRequestGet(context) {
@@ -91,11 +117,7 @@ export async function onRequestPost(context) {
       store.inspections = store.inspections.filter(i => String(i.id) !== String(body.id));
     } else if (body && body.type === 'FULL_SYNC' && body.payload) {
       if (Array.isArray(body.payload.survey_requests)) {
-        if (body.payload.is_teacher_update) {
-          store.survey_requests = body.payload.survey_requests;
-        } else {
-          store.survey_requests = mergeArrays(body.payload.survey_requests, store.survey_requests);
-        }
+        store.survey_requests = mergeArrays(body.payload.survey_requests, store.survey_requests);
       }
       if (Array.isArray(body.payload.inspections)) {
         store.inspections = mergeArrays(body.payload.inspections, store.inspections);
