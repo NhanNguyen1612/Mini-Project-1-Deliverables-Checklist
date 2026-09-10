@@ -34,7 +34,6 @@ export const registerLocalUser = async (email, role, password) => {
   saveRegisteredUsersLocal(local);
   saveUserRole(email, role);
 
-  // Sync user registration to cloud
   await sendCloudRelaySync({
     type: 'REGISTER_USER',
     payload: { email, role, password }
@@ -70,7 +69,6 @@ export const getUserRoleByEmail = (identifier) => {
   const roles = getSavedRoles();
   const lower = identifier.toLowerCase();
 
-  // Check active session role override first
   const activeRole = sessionStorage.getItem('vku_active_session_role') || localStorage.getItem('vku_active_session_role');
   if (activeRole) return activeRole;
 
@@ -143,34 +141,71 @@ const notifySync = (type) => {
 const sendCloudRelaySync = async (payload) => {
   if (!navigator.onLine) return;
 
-  // 1. Send to Cloudflare Pages Functions route
+  // 1. Fetch current remote cloud state FIRST so we merge and NEVER overwrite other devices' data!
+  let remoteRequests = [];
+  let remoteInspections = [];
+  let remoteUsers = {};
+
+  try {
+    const res = await fetch(GLOBAL_CLOUD_FALLBACK);
+    if (res.ok) {
+      const remote = await res.json();
+      if (remote && remote.data) {
+        remoteRequests = remote.data.survey_requests || [];
+        remoteInspections = remote.data.inspections || [];
+        remoteUsers = remote.data.users || {};
+      }
+    }
+  } catch (err) {}
+
+  // 2. Read local items
+  const localRequests = getLocalStorageBackup('vku_shared_survey_requests');
+  const localInspections = getLocalStorageBackup('vku_shared_inspections');
+  const localUsers = getRegisteredUsers();
+
+  // 3. Merge remote + local
+  const mergedRequests = mergeItems(remoteRequests, localRequests);
+  const mergedInspections = mergeItems(remoteInspections, localInspections);
+  const mergedUsers = { ...remoteUsers, ...localUsers };
+
+  // Save merged state locally
+  saveLocalStorageBackup('vku_shared_survey_requests', mergedRequests);
+  saveLocalStorageBackup('vku_shared_inspections', mergedInspections);
+  saveRegisteredUsersLocal(mergedUsers);
+
+  // 4. Push merged state to Cloudflare Pages Functions route
   try {
     await fetch('/api/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        type: 'FULL_SYNC',
+        payload: {
+          survey_requests: mergedRequests,
+          inspections: mergedInspections,
+          users: mergedUsers
+        }
+      })
     });
   } catch (e) {}
 
-  // 2. Direct Push to Master Cloud Store for 100% instant reliability
+  // 5. Push merged state directly to Master Cloud Store
   try {
-    const localRequests = getLocalStorageBackup('vku_shared_survey_requests');
-    const localInspections = getLocalStorageBackup('vku_shared_inspections');
-    const localUsers = getRegisteredUsers();
-
     await fetch(GLOBAL_CLOUD_FALLBACK, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: 'VKU_FIELD_SURVEY_MASTER_STORE_2026',
         data: {
-          survey_requests: localRequests,
-          inspections: localInspections,
-          users: localUsers
+          survey_requests: mergedRequests,
+          inspections: mergedInspections,
+          users: mergedUsers
         }
       })
     });
   } catch (e) {}
+
+  notifySync('CLOUD_SYNC_UPDATED');
 };
 
 export const sendFullCloudSync = async (isTeacherUpdate = false) => {
@@ -205,21 +240,7 @@ export const pullCloudRelaySync = async () => {
   let store = { survey_requests: [], inspections: [], users: {} };
   let fetchSucceeded = false;
 
-  // 1. Try pulling from Cloudflare Pages Function
-  try {
-    const res = await fetch('/api/sync');
-    if (res.ok) {
-      const data = await res.json();
-      if (data && (Array.isArray(data.survey_requests) || Array.isArray(data.inspections))) {
-        store.survey_requests = mergeItems(data.survey_requests, store.survey_requests);
-        store.inspections = mergeItems(data.inspections, store.inspections);
-        if (data.users) store.users = { ...store.users, ...data.users };
-        fetchSucceeded = true;
-      }
-    }
-  } catch (err) {}
-
-  // 2. Direct Pull from Master Cloud Endpoint for 100% guarantee across devices
+  // 1. Direct Pull from Master Cloud Endpoint
   try {
     const res = await fetch(GLOBAL_CLOUD_FALLBACK);
     if (res.ok) {
@@ -233,6 +254,20 @@ export const pullCloudRelaySync = async () => {
     }
   } catch (err) {}
 
+  // 2. Pull from Cloudflare Pages Function route
+  try {
+    const res = await fetch('/api/sync');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && (Array.isArray(data.survey_requests) || Array.isArray(data.inspections))) {
+        store.survey_requests = mergeItems(data.survey_requests, store.survey_requests);
+        store.inspections = mergeItems(data.inspections, store.inspections);
+        if (data.users) store.users = { ...store.users, ...data.users };
+        fetchSucceeded = true;
+      }
+    }
+  } catch (err) {}
+
   if (!fetchSucceeded) return;
 
   let updated = false;
@@ -240,8 +275,10 @@ export const pullCloudRelaySync = async () => {
   // 1. Sync Registered Users
   if (store.users && typeof store.users === 'object' && Object.keys(store.users).length > 0) {
     const currentUsers = getRegisteredUsers();
+    const currentStr = JSON.stringify(currentUsers);
     const mergedUsers = { ...currentUsers, ...store.users };
-    if (Object.keys(mergedUsers).length !== Object.keys(currentUsers).length) {
+    const mergedStr = JSON.stringify(mergedUsers);
+    if (mergedStr !== currentStr) {
       saveRegisteredUsersLocal(mergedUsers);
       for (const [em, u] of Object.entries(mergedUsers)) {
         if (u.role) saveUserRole(em, u.role);
@@ -253,12 +290,14 @@ export const pullCloudRelaySync = async () => {
   // 2. Sync Survey Requests
   if (Array.isArray(store.survey_requests) && store.survey_requests.length > 0) {
     const currentLocal = getLocalStorageBackup('vku_shared_survey_requests');
+    const currentStr = JSON.stringify(currentLocal);
     const merged = mergeItems(store.survey_requests, currentLocal);
+    const mergedStr = JSON.stringify(merged);
     saveLocalStorageBackup('vku_shared_survey_requests', merged);
     for (const req of merged) {
       try { await db.survey_requests.put(req); } catch (e) {}
     }
-    if (merged.length !== currentLocal.length) {
+    if (mergedStr !== currentStr) {
       updated = true;
     }
   }
@@ -266,12 +305,14 @@ export const pullCloudRelaySync = async () => {
   // 3. Sync Inspections
   if (Array.isArray(store.inspections) && store.inspections.length > 0) {
     const currentLocal = getLocalStorageBackup('vku_shared_inspections');
+    const currentStr = JSON.stringify(currentLocal);
     const merged = mergeItems(store.inspections, currentLocal);
+    const mergedStr = JSON.stringify(merged);
     saveLocalStorageBackup('vku_shared_inspections', merged);
     for (const insp of merged) {
       try { await db.cloud_inspections.put(insp); } catch (e) {}
     }
-    if (merged.length !== currentLocal.length) {
+    if (mergedStr !== currentStr) {
       updated = true;
     }
   }
@@ -282,8 +323,8 @@ export const pullCloudRelaySync = async () => {
 };
 
 if (typeof window !== 'undefined') {
-  setInterval(pullCloudRelaySync, 2000);
-  setInterval(() => sendFullCloudSync(false), 4000);
+  setInterval(pullCloudRelaySync, 1000);
+  setInterval(() => sendFullCloudSync(false), 2500);
   window.addEventListener('focus', pullCloudRelaySync);
   pullCloudRelaySync();
 }
@@ -382,7 +423,6 @@ export const supabase = {
 
       let registered = getRegisteredUser(email);
 
-      // Try pulling cloud users if not found locally
       if (!registered) {
         await pullCloudRelaySync();
         registered = getRegisteredUser(email);
@@ -474,7 +514,7 @@ export const supabase = {
               let currentBackup = getLocalStorageBackup('vku_shared_survey_requests');
               currentBackup = currentBackup.filter(i => String(i[field]) !== String(val));
               saveLocalStorageBackup('vku_shared_survey_requests', currentBackup);
-              sendCloudRelaySync({ type: 'DELETE_REQUEST', id: val });
+              await sendCloudRelaySync({ type: 'DELETE_REQUEST', id: val });
               notifySync('REQUEST_DELETED');
               await sendFullCloudSync(true);
             } else if (table === 'inspections') {
@@ -488,7 +528,7 @@ export const supabase = {
               let currentBackup = getLocalStorageBackup('vku_shared_inspections');
               currentBackup = currentBackup.filter(i => String(i[field]) !== String(val));
               saveLocalStorageBackup('vku_shared_inspections', currentBackup);
-              sendCloudRelaySync({ type: 'DELETE_INSPECTION', id: val });
+              await sendCloudRelaySync({ type: 'DELETE_INSPECTION', id: val });
               notifySync('INSPECTION_DELETED');
               await sendFullCloudSync(false);
             }

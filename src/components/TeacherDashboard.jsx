@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../supabaseClient';
+import { supabase, pullCloudRelaySync } from '../supabaseClient';
 import { LayoutDashboard, PlusCircle, Trash2, Search, Filter, RefreshCw, MapPin, Image as ImageIcon, Send, CheckCircle2 } from 'lucide-react';
 
 export default function TeacherDashboard({ user }) {
@@ -25,7 +25,7 @@ export default function TeacherDashboard({ user }) {
 
     window.addEventListener('storage', handleSyncEvent);
 
-    const intervalId = setInterval(handleSyncEvent, 2000);
+    const intervalId = setInterval(handleSyncEvent, 1000);
 
     const channel = typeof window !== 'undefined' && window.BroadcastChannel ? new BroadcastChannel('vku_survey_sync_channel') : null;
     if (channel) {
@@ -43,6 +43,7 @@ export default function TeacherDashboard({ user }) {
 
   const fetchData = async () => {
     setLoading(true);
+    await pullCloudRelaySync();
     await Promise.all([fetchAllInspections(), fetchAllRequests()]);
     setLoading(false);
   };

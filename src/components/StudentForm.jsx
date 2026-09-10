@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../supabaseClient';
+import { supabase, pullCloudRelaySync } from '../supabaseClient';
 import { db } from '../db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Camera, Send, WifiOff, History, CheckCircle, MapPin, ClipboardList, Navigation, ArrowLeft, PlusCircle, RefreshCw, Lock, CheckSquare } from 'lucide-react';
@@ -37,17 +37,17 @@ export default function StudentForm({ user }) {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    const handleSyncEvent = () => {
+    const handleSyncEvent = async () => {
+      await pullCloudRelaySync();
       fetchCloudHistory();
       fetchTeacherRequests();
     };
 
     window.addEventListener('storage', handleSyncEvent);
 
-    fetchCloudHistory();
-    fetchTeacherRequests();
+    handleSyncEvent();
 
-    const intervalId = setInterval(handleSyncEvent, 2000);
+    const intervalId = setInterval(handleSyncEvent, 1000);
 
     const channel = typeof window !== 'undefined' && window.BroadcastChannel ? new BroadcastChannel('vku_survey_sync_channel') : null;
     if (channel) {
