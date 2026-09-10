@@ -191,7 +191,7 @@ export const getUserRoleByEmail = (identifier) => {
   return 'student';
 };
 
-const getLocalStorageBackup = (key) => {
+export const getLocalStorageBackup = (key) => {
   try {
     return JSON.parse(localStorage.getItem(key) || '[]');
   } catch (e) {
@@ -199,7 +199,7 @@ const getLocalStorageBackup = (key) => {
   }
 };
 
-const saveLocalStorageBackup = (key, items) => {
+export const saveLocalStorageBackup = (key, items) => {
   try {
     localStorage.setItem(key, JSON.stringify(items));
   } catch (e) {
@@ -207,7 +207,7 @@ const saveLocalStorageBackup = (key, items) => {
   }
 };
 
-const mergeItems = (primaryList = [], secondaryList = []) => {
+export const mergeItems = (primaryList = [], secondaryList = []) => {
   const map = new Map();
   for (const item of primaryList || []) {
     if (!item) continue;
@@ -351,8 +351,8 @@ export const pullCloudRelaySync = async () => {
 };
 
 if (typeof window !== 'undefined') {
-  setInterval(pullCloudRelaySync, 500);
-  setInterval(() => sendFullCloudSync(false), 1000);
+  setInterval(pullCloudRelaySync, 3000);
+  setInterval(() => sendFullCloudSync(false), 5000);
   window.addEventListener('focus', pullCloudRelaySync);
   pullCloudRelaySync();
 }

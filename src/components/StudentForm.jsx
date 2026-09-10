@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase, pullCloudRelaySync } from '../supabaseClient';
+import { supabase, pullCloudRelaySync, getLocalStorageBackup, mergeItems } from '../supabaseClient';
 import { db } from '../db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Camera, Send, WifiOff, History, CheckCircle, MapPin, ClipboardList, Navigation, ArrowLeft, PlusCircle, RefreshCw, Lock, CheckSquare } from 'lucide-react';
@@ -16,12 +16,10 @@ export default function StudentForm({ user }) {
   const [locating, setLocating] = useState(false);
   const [locationMsg, setLocationMsg] = useState('');
 
-  const [teacherRequests, setTeacherRequests] = useState([]);
   const [selectedRequestId, setSelectedRequestId] = useState('');
   const [selectedRequest, setSelectedRequest] = useState(null);
 
   const [onlineStatus, setOnlineStatus] = useState(navigator.onLine);
-  const [cloudInspections, setCloudInspections] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [previewImage, setPreviewImage] = useState(null);
@@ -31,64 +29,43 @@ export default function StudentForm({ user }) {
     [user.id]
   );
 
+  const teacherRequests = useLiveQuery(
+    async () => {
+      let dexieItems = [];
+      try { dexieItems = await db.survey_requests.toArray(); } catch (e) {}
+      const localItems = getLocalStorageBackup('vku_shared_survey_requests');
+      const merged = mergeItems(localItems, dexieItems);
+      return merged.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    },
+    []
+  ) || [];
+
+  const cloudInspections = useLiveQuery(
+    async () => {
+      let dexieItems = [];
+      try {
+        dexieItems = await db.cloud_inspections.where('user_id').equals(user.id).toArray();
+      } catch (e) {}
+      const localItems = getLocalStorageBackup('vku_shared_inspections').filter(i => String(i.user_id) === String(user.id));
+      const merged = mergeItems(localItems, dexieItems);
+      return merged.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    },
+    [user.id]
+  ) || [];
+
   useEffect(() => {
     const handleOnline = () => setOnlineStatus(true);
     const handleOffline = () => setOnlineStatus(false);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    const handleSyncEvent = async () => {
-      await pullCloudRelaySync();
-      fetchCloudHistory();
-      fetchTeacherRequests();
-    };
-
-    window.addEventListener('storage', handleSyncEvent);
-
-    handleSyncEvent();
-
-    const intervalId = setInterval(handleSyncEvent, 200);
-
-    const channel = typeof window !== 'undefined' && window.BroadcastChannel ? new BroadcastChannel('vku_survey_sync_channel') : null;
-    if (channel) {
-      channel.onmessage = (event) => {
-        handleSyncEvent();
-      };
-    }
+    pullCloudRelaySync();
 
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
-      window.removeEventListener('storage', handleSyncEvent);
-      clearInterval(intervalId);
-      if (channel) channel.close();
     };
   }, []);
-
-  const fetchTeacherRequests = async () => {
-    try {
-      const { data } = await supabase
-        .from('survey_requests')
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (data) setTeacherRequests(data);
-    } catch (e) {
-      console.warn(e);
-    }
-  };
-
-  const fetchCloudHistory = async () => {
-    try {
-      const { data } = await supabase
-        .from('inspections')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
-      if (data) setCloudInspections(data);
-    } catch (e) {
-      console.warn(e);
-    }
-  };
 
   const handleStartSurvey = (req) => {
     const cats = (req && Array.isArray(req.categories) && req.categories.length > 0)
@@ -164,7 +141,31 @@ export default function StudentForm({ user }) {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (event) => setImageUrl(event.target.result);
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          const maxDim = 800;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.6);
+          setImageUrl(compressedDataUrl);
+        };
+        img.src = event.target.result;
+      };
       reader.readAsDataURL(file);
     }
   };
@@ -195,7 +196,6 @@ export default function StudentForm({ user }) {
       } else {
         await supabase.from('inspections').insert([payload]);
         setSuccessMsg('Gửi báo cáo khảo sát thành công cho Giảng viên!');
-        fetchCloudHistory();
       }
     } catch (err) {
       await db.offline_inspections.add(payload);

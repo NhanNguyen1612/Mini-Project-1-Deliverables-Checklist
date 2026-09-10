@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { supabase, pullCloudRelaySync } from '../supabaseClient';
+import { supabase, pullCloudRelaySync, getLocalStorageBackup, mergeItems } from '../supabaseClient';
+import { db } from '../db';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { LayoutDashboard, PlusCircle, Trash2, Search, Filter, RefreshCw, MapPin, Image as ImageIcon, Send, CheckCircle2 } from 'lucide-react';
 
 export default function TeacherDashboard({ user }) {
   const [activeTab, setActiveTab] = useState('reports');
-  const [inspections, setInspections] = useState([]);
-  const [requests, setRequests] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
@@ -16,59 +15,34 @@ export default function TeacherDashboard({ user }) {
   const [requestSuccessMsg, setRequestSuccessMsg] = useState('');
   const [previewImage, setPreviewImage] = useState(null);
 
+  const requests = useLiveQuery(
+    async () => {
+      let dexieItems = [];
+      try { dexieItems = await db.survey_requests.toArray(); } catch (e) {}
+      const localItems = getLocalStorageBackup('vku_shared_survey_requests');
+      const merged = mergeItems(localItems, dexieItems);
+      return merged.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    },
+    []
+  ) || [];
+
+  const inspections = useLiveQuery(
+    async () => {
+      let dexieItems = [];
+      try { dexieItems = await db.cloud_inspections.toArray(); } catch (e) {}
+      const localItems = getLocalStorageBackup('vku_shared_inspections');
+      const merged = mergeItems(localItems, dexieItems);
+      return merged.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    },
+    []
+  ) || [];
+
   useEffect(() => {
-    fetchData();
-
-    const handleSyncEvent = () => {
-      fetchData();
-    };
-
-    window.addEventListener('storage', handleSyncEvent);
-
-    const intervalId = setInterval(handleSyncEvent, 200);
-
-    const channel = typeof window !== 'undefined' && window.BroadcastChannel ? new BroadcastChannel('vku_survey_sync_channel') : null;
-    if (channel) {
-      channel.onmessage = (event) => {
-        handleSyncEvent();
-      };
-    }
-
-    return () => {
-      window.removeEventListener('storage', handleSyncEvent);
-      clearInterval(intervalId);
-      if (channel) channel.close();
-    };
+    pullCloudRelaySync();
   }, []);
 
   const fetchData = async () => {
     await pullCloudRelaySync();
-    await Promise.all([fetchAllInspections(), fetchAllRequests()]);
-    setLoading(false);
-  };
-
-  const fetchAllInspections = async () => {
-    try {
-      const { data } = await supabase
-        .from('inspections')
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (data) setInspections(data);
-    } catch (e) {
-      console.warn(e);
-    }
-  };
-
-  const fetchAllRequests = async () => {
-    try {
-      const { data } = await supabase
-        .from('survey_requests')
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (data) setRequests(data);
-    } catch (e) {
-      console.warn(e);
-    }
   };
 
   const handleCreateRequest = async (e) => {
@@ -82,32 +56,25 @@ export default function TeacherDashboard({ user }) {
       created_at: new Date().toISOString()
     };
 
-    // Optimistic UI update (0ms instant display for teacher)
-    setRequests(prev => [payload, ...prev]);
     setRequestSuccessMsg('Đã tạo và gửi Yêu cầu Khảo sát tới toàn bộ Sinh viên thành công!');
-    const savedTitle = requestTitle;
-    const savedFacility = facilityName;
     setRequestTitle('');
     setFacilityName('');
 
     try {
       await supabase.from('survey_requests').insert([payload]);
     } catch (err) {}
-    fetchAllRequests();
     setTimeout(() => setRequestSuccessMsg(''), 4000);
   };
 
   const handleDeleteInspection = async (id) => {
     if (confirm('Bạn có chắc muốn xóa bản ghi đánh giá này?')) {
       await supabase.from('inspections').delete().eq('id', id);
-      fetchAllInspections();
     }
   };
 
   const handleDeleteRequest = async (id) => {
     if (confirm('Bạn có chắc muốn xóa yêu cầu khảo sát này?')) {
       await supabase.from('survey_requests').delete().eq('id', id);
-      fetchAllRequests();
     }
   };
 
