@@ -1,0 +1,19 @@
+# Node & Build
+node_modules/
+dist/
+
+# Android build outputs & local properties
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/captures/
+*.keystore
+
+# OS & Environment
+.DS_Store
+Thumbs.db
+.env
+.env.local
+.idea/
+.vscode/

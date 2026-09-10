@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1E3A8A">
+  <meta name="description" content="Offline-first inspection form for VKU campus facilities with zero network connectivity requirement.">
+  <title>VKU Field Survey PWA</title>
+  
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="style.css">
+  <link rel="apple-touch-icon" href="icon-192.png">
+</head>
+<body>
+
+  <!-- App Header -->
+  <header class="app-header">
+    <div class="header-container">
+      <div class="brand">
+        <div class="logo-badge">VKU</div>
+        <div class="brand-text">
+          <h1>Field Survey PWA</h1>
+          <p>Khảo sát Cơ sở Vật chất Off-line</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <!-- Network Status Indicator -->
+        <div id="network-status" class="status-badge offline">
+          <span class="dot"></span>
+          <span id="status-text">OFFLINE</span>
+        </div>
+        <!-- Install PWA Button -->
+        <button id="btn-install" class="btn-install hidden" title="Cài đặt PWA">
+          ⚡ Cài PWA
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <nav class="app-nav">
+    <button class="nav-tab active" data-tab="tab-dashboard">
+      <span class="icon">📊</span> Tổng quan
+    </button>
+    <button class="nav-tab" data-tab="tab-new">
+      <span class="icon">📝</span> Tạo khảo sát
+    </button>
+    <button class="nav-tab" data-tab="tab-sync">
+      <span class="icon">🔄</span> Đồng bộ & Dữ liệu
+    </button>
+  </nav>
+
+  <!-- Main Content Container -->
+  <main class="main-content">
+
+    <!-- TAB 1: DASHBOARD -->
+    <section id="tab-dashboard" class="tab-page active">
+      <!-- Metrics Row -->
+      <div class="metrics-grid">
+        <div class="metric-card total">
+          <div class="metric-value" id="count-total">0</div>
+          <div class="metric-label">Tổng số phiếu</div>
+        </div>
+        <div class="metric-card success">
+          <div class="metric-value" id="count-good">0</div>
+          <div class="metric-label">Hạng mục Tốt 🟢</div>
+        </div>
+        <div class="metric-card warning">
+          <div class="metric-value" id="count-warning">0</div>
+          <div class="metric-label">Cần bảo trì 🟡</div>
+        </div>
+        <div class="metric-card danger">
+          <div class="metric-value" id="count-danger">0</div>
+          <div class="metric-label">Hỏng / Nguy hiểm 🔴</div>
+        </div>
+        <div class="metric-card pending">
+          <div class="metric-value" id="count-unsynced">0</div>
+          <div class="metric-label">Chờ đồng bộ ⏳</div>
+        </div>
+      </div>
+
+      <!-- Controls & Filter Bar -->
+      <div class="filter-card">
+        <div class="search-box">
+          <input type="text" id="search-input" placeholder="🔍 Tìm theo vị trí, người khảo sát, hạng mục, mô tả...">
+        </div>
+        <div class="filter-controls">
+          <select id="filter-building">
+            <option value="">Tất cả Khu vực</option>
+            <option value="Khu A">Khu A (Hành chính)</option>
+            <option value="Khu B">Khu B (Giảng đường)</option>
+            <option value="Khu C">Khu C (Khoa CNTT)</option>
+            <option value="Khu E">Khu E (Việt - Hàn)</option>
+            <option value="Ký túc xá">Ký túc xá</option>
+            <option value="Thư viện">Thư viện</option>
+            <option value="Nhà thi đấu">Nhà thi đấu</option>
+            <option value="Khác">Khác</option>
+          </select>
+
+          <select id="filter-status">
+            <option value="">Tất cả Tình trạng</option>
+            <option value="good">🟢 Tốt</option>
+            <option value="warning">🟡 Cần bảo trì</option>
+            <option value="danger">🔴 Hỏng hóc</option>
+            <option value="emergency">🚨 Nguy hiểm</option>
+          </select>
+
+          <button id="btn-quick-sync" class="btn btn-secondary btn-sm">
+            🔄 Đồng bộ ngay (<span id="unsynced-badge">0</span>)
+          </button>
+        </div>
+      </div>
+
+      <!-- Survey List -->
+      <div class="section-title">
+        <h2>Danh sách phiếu khảo sát phòng / hạ tầng</h2>
+        <span class="badge" id="list-count-badge">0 bản ghi</span>
+      </div>
+
+      <div id="survey-list" class="survey-list">
+        <!-- Survey cards injected via JavaScript -->
+        <div class="empty-state">
+          <div class="empty-icon">📂</div>
+          <p>Chưa có dữ liệu khảo sát nào.</p>
+          <button class="btn btn-primary" onclick="switchTab('tab-new')">➕ Tạo bài khảo sát mới</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: NEW INSPECTION FORM -->
+    <section id="tab-new" class="tab-page">
+      <div class="form-card">
+        <div class="form-header">
+          <h2>Phòng / Cơ sở Vật chất Khảo sát</h2>
+          <p>Nhập thông tin kiểm tra từng hạng mục thiết bị riêng biệt tại VKU</p>
+        </div>
+
+        <!-- Auto-Save Draft Alert -->
+        <div id="draft-alert" class="draft-alert hidden" style="background:#EFF6FF; border:1px solid #93C5FD; color:#1E40AF; padding:10px 14px; border-radius:8px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; font-size:13px;">
+          <span>📝 <strong>Đã khôi phục bản nháp dở dang</strong> (lưu lúc <span id="draft-time">vừa xong</span>)</span>
+          <button type="button" id="btn-clear-draft" class="btn btn-outline btn-sm" style="font-size:11px; padding:3px 8px; border-color:#93C5FD; color:#1E40AF;">🗑️ Xóa nháp</button>
+        </div>
+
+        <form id="inspection-form">
+          <!-- Surveyor Info -->
+          <div class="form-row">
+            <div class="form-group">
+              <label for="surveyor-name">Họ tên người kiểm tra <span class="req">*</span></label>
+              <input type="text" id="surveyor-name" placeholder="VD: Nguyễn Văn A" required>
+            </div>
+            <div class="form-group">
+              <label for="surveyor-id">Mã SV / Cán bộ <span class="req">*</span></label>
+              <input type="text" id="surveyor-id" placeholder="VD: 21IT001" required>
+            </div>
+          </div>
+
+          <!-- Location Selection -->
+          <div class="form-row">
+            <div class="form-group">
+              <label for="building">Tòa nhà / Khu vực <span class="req">*</span></label>
+              <select id="building" required>
+                <option value="">-- Chọn Khu vực --</option>
+                <option value="Khu A">Khu A - Tòa nhà Hành chính</option>
+                <option value="Khu B">Khu B - Tòa nhà Giảng đường</option>
+                <option value="Khu C">Khu C - Khoa CNTT & TT</option>
+                <option value="Khu E">Khu E - Tòa nhà Việt - Hàn</option>
+                <option value="Ký túc xá">Ký túc xá Sinh viên</option>
+                <option value="Thư viện">Thư viện Center</option>
+                <option value="Nhà thi đấu">Nhà thi đấu / Thể thao</option>
+                <option value="Khác">Khu vực Khác</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="room-details">Phòng / Vị trí chi tiết <span class="req">*</span></label>
+              <input type="text" id="room-details" placeholder="VD: Phòng Lab C102, Tầng 1" required>
+            </div>
+          </div>
+
+          <!-- DYNAMIC INSPECTION ITEMS CONTAINER -->
+          <div class="form-section-header">
+            <h3>📋 Danh sách Hạng mục Thiết bị Kiểm tra</h3>
+            <p>Nhập tình trạng, mô tả sự cố và chụp ảnh riêng cho từng hạng mục</p>
+          </div>
+
+          <div id="inspection-items-container" class="inspection-items-container">
+            <!-- Item cards dynamically injected by JS -->
+          </div>
+
+          <button type="button" id="btn-add-item" class="btn btn-outline btn-block add-item-btn">
+            ➕ Thêm Hạng mục Thiết bị Khác
+          </button>
+
+          <!-- GPS Location -->
+          <div class="form-group" style="margin-top: 24px;">
+            <label>Vị trí GPS Tọa độ</label>
+            <div class="gps-container">
+              <button type="button" id="btn-get-gps" class="btn btn-outline btn-sm">
+                📍 Lấy tọa độ GPS tự động
+              </button>
+              <div id="gps-display" class="gps-display">Chưa lấy tọa độ GPS</div>
+            </div>
+            <input type="hidden" id="gps-lat">
+            <input type="hidden" id="gps-lng">
+          </div>
+
+          <!-- Submit Button -->
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary btn-block btn-lg">
+              💾 LƯU PHIẾU KHẢO SÁT (OFFLINE-READY)
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- TAB 3: SYNC & DATA MANAGEMENT -->
+    <section id="tab-sync" class="tab-page">
+      <div class="sync-grid">
+        <!-- Sync Panel -->
+        <div class="card sync-card">
+          <div class="card-header">
+            <h3>🔄 Quản lý Đồng bộ Dữ liệu</h3>
+          </div>
+          <div class="card-body">
+            <p>Trạng thái kết nối hiện tại: <strong id="sync-connection-status" class="text-offline">Đang Offline</strong></p>
+            <p>Số bản ghi chờ đồng bộ lên máy chủ: <span class="badge badge-warning" id="sync-queue-count">0</span></p>
+            
+            <div style="margin: 12px 0;">
+              <label for="api-endpoint-input" style="font-size:12px; font-weight:bold; color:#475569;">🌐 Server API Endpoint Đồng bộ (Cloud Functions Backend):</label>
+              <input type="text" id="api-endpoint-input" style="width:100%; font-size:12px; padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; margin-top:4px;" placeholder="/api/surveys (Tự động nhận diện Cloudflare Pages Backend API)">
+            </div>
+
+            <div class="sync-actions">
+              <button id="btn-force-sync" class="btn btn-primary">
+                ☁️ Đồng bộ 2 chiều với Cloud (Push & Pull)
+              </button>
+              <button id="btn-toggle-simulated-server" class="btn btn-outline">
+                🛠️ Bật Server Giả lập (Demo Sync)
+              </button>
+            </div>
+            
+            <div id="sync-log" class="sync-log">
+              <div class="log-entry info">[Hệ thống] Sẵn sàng hoạt động ở chế độ Offline-first (IndexedDB).</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Export & Backup Panel -->
+        <div class="card export-card">
+          <div class="card-header">
+            <h3>📥 Xuất & Sao lưu Dữ liệu Khảo sát</h3>
+          </div>
+          <div class="card-body">
+            <p>Xuất toàn bộ danh sách dữ liệu lưu trữ nội bộ ra định dạng chuẩn để lập báo cáo hoặc truyền thủ công khi không có mạng.</p>
+            
+            <div class="export-buttons">
+              <button id="btn-export-csv" class="btn btn-success">
+                📊 Xuất file CSV (Mở bằng Excel)
+              </button>
+              <button id="btn-export-json" class="btn btn-secondary">
+                📄 Xuất file JSON (Bản lưu chi tiết)
+              </button>
+              <button id="btn-load-sample" class="btn btn-outline">
+                🧪 Nạp dữ liệu mẫu (Test Demo)
+              </button>
+              <button id="btn-clear-db" class="btn btn-danger-outline">
+                🗑️ Xóa toàn bộ CSDL tạm
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Diagnostic & Storage Panel -->
+        <div class="card storage-card">
+          <div class="card-header">
+            <h3>⚙️ Thông tin Bộ nhớ Offline (IndexedDB)</h3>
+          </div>
+          <div class="card-body">
+            <div class="storage-info-row">
+              <span>Database Engine:</span> <strong>HTML5 IndexedDB (`VKUSurveyDB`)</strong>
+            </div>
+            <div class="storage-info-row">
+              <span>Service Worker:</span> <strong id="sw-status">Đang kiểm tra...</strong>
+            </div>
+            <div class="storage-info-row">
+              <span>Dung lượng đã sử dụng:</span> <strong id="db-usage-estimate">Đang tính toán...</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Modal View Inspection Detail -->
+  <div id="detail-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modal-title">Chi tiết Khảo sát</h3>
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </div>
+      <div class="modal-body" id="modal-body">
+        <!-- Content dynamically injected -->
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal()">Đóng</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

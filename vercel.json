@@ -1,0 +1,25 @@
+{
+  "version": 2,
+  "name": "vku-field-survey-pwa",
+  "builds": [
+    {
+      "src": "app/src/main/assets/www/**",
+      "use": "@vercel/static"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/app/src/main/assets/www/$1"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" },
+        { "key": "Service-Worker-Allowed", "value": "/" }
+      ]
+    }
+  ]
+}
