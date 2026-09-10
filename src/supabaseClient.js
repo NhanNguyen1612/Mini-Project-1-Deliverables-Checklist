@@ -1,8 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { db } from './db';
 
-const GLOBAL_CLOUD_FALLBACK = 'https://api.restful-api.dev/objects/ff808181a067127101a08a573fc26212';
-
 const defaultUrl = import.meta.env.VITE_SUPABASE_URL || localStorage.getItem('vku_supabase_url') || 'https://your-project.supabase.co';
 const defaultKey = import.meta.env.VITE_SUPABASE_ANON_KEY || localStorage.getItem('vku_supabase_key') || 'your-anon-key';
 
@@ -160,35 +158,11 @@ const notifySync = (type) => {
 
 const sendCloudRelaySync = async (payload) => {
   if (!navigator.onLine) return;
-  if (realClient) return; // If real Supabase client is connected, direct SQL handles sync
-
-  let remoteRequests = [];
-  let remoteInspections = [];
-  let remoteUsers = {};
-
-  try {
-    const res = await fetch(GLOBAL_CLOUD_FALLBACK);
-    if (res.ok) {
-      const remote = await res.json();
-      if (remote && remote.data) {
-        remoteRequests = remote.data.survey_requests || [];
-        remoteInspections = remote.data.inspections || [];
-        remoteUsers = remote.data.users || {};
-      }
-    }
-  } catch (err) {}
+  if (realClient) return; // Direct Supabase handles sync if connected
 
   const localRequests = getLocalStorageBackup('vku_shared_survey_requests');
   const localInspections = getLocalStorageBackup('vku_shared_inspections');
   const localUsers = getRegisteredUsers();
-
-  const mergedRequests = mergeItems(remoteRequests, localRequests);
-  const mergedInspections = mergeItems(remoteInspections, localInspections);
-  const mergedUsers = { ...remoteUsers, ...localUsers };
-
-  saveLocalStorageBackup('vku_shared_survey_requests', mergedRequests);
-  saveLocalStorageBackup('vku_shared_inspections', mergedInspections);
-  saveRegisteredUsersLocal(mergedUsers);
 
   try {
     await fetch('/api/sync', {
@@ -197,24 +171,9 @@ const sendCloudRelaySync = async (payload) => {
       body: JSON.stringify({
         type: 'FULL_SYNC',
         payload: {
-          survey_requests: mergedRequests,
-          inspections: mergedInspections,
-          users: mergedUsers
-        }
-      })
-    });
-  } catch (e) {}
-
-  try {
-    await fetch(GLOBAL_CLOUD_FALLBACK, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'VKU_FIELD_SURVEY_MASTER_STORE_2026',
-        data: {
-          survey_requests: mergedRequests,
-          inspections: mergedInspections,
-          users: mergedUsers
+          survey_requests: localRequests,
+          inspections: localInspections,
+          users: localUsers
         }
       })
     });
@@ -257,19 +216,6 @@ export const pullCloudRelaySync = async () => {
 
   let store = { survey_requests: [], inspections: [], users: {} };
   let fetchSucceeded = false;
-
-  try {
-    const res = await fetch(GLOBAL_CLOUD_FALLBACK);
-    if (res.ok) {
-      const remote = await res.json();
-      if (remote && remote.data) {
-        store.survey_requests = mergeItems(remote.data.survey_requests, store.survey_requests);
-        store.inspections = mergeItems(remote.data.inspections, store.inspections);
-        if (remote.data.users) store.users = { ...store.users, ...remote.data.users };
-        fetchSucceeded = true;
-      }
-    }
-  } catch (err) {}
 
   try {
     const res = await fetch('/api/sync');
@@ -336,8 +282,8 @@ export const pullCloudRelaySync = async () => {
 };
 
 if (typeof window !== 'undefined') {
-  setInterval(pullCloudRelaySync, 1000);
-  setInterval(() => sendFullCloudSync(false), 2500);
+  setInterval(pullCloudRelaySync, 2000);
+  setInterval(() => sendFullCloudSync(false), 3000);
   window.addEventListener('focus', pullCloudRelaySync);
   pullCloudRelaySync();
 }

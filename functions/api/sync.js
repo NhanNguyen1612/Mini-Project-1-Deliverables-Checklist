@@ -1,5 +1,3 @@
-const GLOBAL_CLOUD_ENDPOINT = 'https://api.restful-api.dev/objects/ff808181a067127101a08a573fc26212';
-
 let memoryStore = {
   survey_requests: [],
   inspections: [],
@@ -28,7 +26,7 @@ const mergeUsers = (usersA = {}, usersB = {}) => {
 };
 
 async function getStore(env) {
-  // 1. Try Cloudflare KV if bound
+  // Try Cloudflare KV if bound
   if (env && env.SURVEY_KV) {
     try {
       const data = await env.SURVEY_KV.get('vku_store', { type: 'json' });
@@ -40,48 +38,18 @@ async function getStore(env) {
     } catch (e) {}
   }
 
-  // 2. Try Global Persistent Endpoint
-  try {
-    const res = await fetch(GLOBAL_CLOUD_ENDPOINT, {
-      headers: { 'User-Agent': 'VKU-Survey-PWA/2.0' }
-    });
-    if (res.ok) {
-      const remote = await res.json();
-      if (remote && remote.data) {
-        memoryStore.survey_requests = mergeArrays(memoryStore.survey_requests, remote.data.survey_requests || []);
-        memoryStore.inspections = mergeArrays(memoryStore.inspections, remote.data.inspections || []);
-        memoryStore.users = mergeUsers(memoryStore.users, remote.data.users || {});
-      }
-    }
-  } catch (e) {}
-
   return memoryStore;
 }
 
 async function saveStore(env, store) {
   memoryStore = store;
 
-  // 1. Save to Cloudflare KV if available
+  // Save to Cloudflare KV if available
   if (env && env.SURVEY_KV) {
     try {
       await env.SURVEY_KV.put('vku_store', JSON.stringify(store));
     } catch (e) {}
   }
-
-  // 2. Save to Global Persistent Endpoint
-  try {
-    await fetch(GLOBAL_CLOUD_ENDPOINT, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'VKU-Survey-PWA/2.0'
-      },
-      body: JSON.stringify({
-        name: 'VKU_FIELD_SURVEY_MASTER_STORE_2026',
-        data: store
-      })
-    });
-  } catch (e) {}
 }
 
 export async function onRequestGet(context) {
