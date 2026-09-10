@@ -32,13 +32,9 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
         cleanupOutdatedCaches: true,
         skipWaiting: true,
-        clientsClaim: true,
+        clientsClaim: false,
         globIgnores: ['**/app.js', '**/functions/**'],
         runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/api\.restful-api\.dev\/.*/i,
-            handler: 'NetworkOnly'
-          },
           {
             urlPattern: /\/api\/sync.*/i,
             handler: 'NetworkOnly'
