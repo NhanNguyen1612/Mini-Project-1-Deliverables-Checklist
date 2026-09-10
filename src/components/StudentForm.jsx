@@ -47,7 +47,7 @@ export default function StudentForm({ user }) {
 
     handleSyncEvent();
 
-    const intervalId = setInterval(handleSyncEvent, 1000);
+    const intervalId = setInterval(handleSyncEvent, 200);
 
     const channel = typeof window !== 'undefined' && window.BroadcastChannel ? new BroadcastChannel('vku_survey_sync_channel') : null;
     if (channel) {

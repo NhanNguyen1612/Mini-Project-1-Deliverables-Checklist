@@ -10,19 +10,43 @@ export const realClient = isPlaceholderUrl(defaultUrl) ? null : createClient(def
 
 const syncChannel = typeof window !== 'undefined' && window.BroadcastChannel ? new BroadcastChannel('vku_survey_sync_channel') : null;
 
-// Subscribe to Supabase Realtime WebSockets if real Client is configured
-if (realClient) {
+let globalWs = null;
+const initWebSocketRelay = () => {
+  if (typeof window === 'undefined' || !window.WebSocket) return;
   try {
-    realClient
-      .channel('public:realtime')
-      .on('postgres_changes', { event: '*', schema: 'public' }, () => {
-        notifySync('CLOUD_SYNC_UPDATED');
-      })
-      .subscribe();
-  } catch (e) {
-    console.warn('Realtime subscription error:', e);
+    globalWs = new WebSocket('wss://free.websocket.in/vku_survey_instant_channel_2026');
+    globalWs.onmessage = () => {
+      pullCloudRelaySync();
+    };
+    globalWs.onclose = () => {
+      setTimeout(initWebSocketRelay, 3000);
+    };
+  } catch (e) {}
+};
+initWebSocketRelay();
+
+const broadcastInstantWs = (type) => {
+  if (globalWs && globalWs.readyState === 1) {
+    try {
+      globalWs.send(JSON.stringify({ type, timestamp: Date.now() }));
+    } catch (e) {}
   }
-}
+};
+
+const notifySync = (type) => {
+  if (syncChannel) {
+    try {
+      syncChannel.postMessage({ type });
+    } catch (e) {}
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('storage'));
+    try {
+      localStorage.setItem('vku_last_sync_trigger', Date.now().toString());
+    } catch (e) {}
+  }
+  broadcastInstantWs(type);
+};
 
 export const getRegisteredUsers = () => {
   try {
@@ -144,17 +168,6 @@ const mergeItems = (primaryList = [], secondaryList = []) => {
     }
   }
   return Array.from(map.values());
-};
-
-const notifySync = (type) => {
-  if (syncChannel) {
-    try {
-      syncChannel.postMessage({ type });
-    } catch (e) {}
-  }
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new Event('storage'));
-  }
 };
 
 const sendCloudRelaySync = async (payload) => {
@@ -450,7 +463,7 @@ export const supabase = {
           }
           saveLocalStorageBackup('vku_shared_survey_requests', currentLocal);
           notifySync('REQUEST_ADDED');
-          await sendFullCloudSync(true);
+          sendFullCloudSync(true).catch(() => {});
         } else if (table === 'inspections') {
           const currentLocal = getLocalStorageBackup('vku_shared_inspections');
           for (const row of rows) {
@@ -461,7 +474,7 @@ export const supabase = {
           }
           saveLocalStorageBackup('vku_shared_inspections', currentLocal);
           notifySync('INSPECTION_ADDED');
-          await sendFullCloudSync(false);
+          sendFullCloudSync(false).catch(() => {});
         }
         return { data: rows, error: null };
       },
@@ -479,9 +492,9 @@ export const supabase = {
               let currentBackup = getLocalStorageBackup('vku_shared_survey_requests');
               currentBackup = currentBackup.filter(i => String(i[field]) !== String(val));
               saveLocalStorageBackup('vku_shared_survey_requests', currentBackup);
-              await sendCloudRelaySync({ type: 'DELETE_REQUEST', id: val });
+              sendCloudRelaySync({ type: 'DELETE_REQUEST', id: val }).catch(() => {});
               notifySync('REQUEST_DELETED');
-              await sendFullCloudSync(true);
+              sendFullCloudSync(true).catch(() => {});
             } else if (table === 'inspections') {
               try {
                 const allLocal = await db.cloud_inspections.toArray();
@@ -493,9 +506,9 @@ export const supabase = {
               let currentBackup = getLocalStorageBackup('vku_shared_inspections');
               currentBackup = currentBackup.filter(i => String(i[field]) !== String(val));
               saveLocalStorageBackup('vku_shared_inspections', currentBackup);
-              await sendCloudRelaySync({ type: 'DELETE_INSPECTION', id: val });
+              sendCloudRelaySync({ type: 'DELETE_INSPECTION', id: val }).catch(() => {});
               notifySync('INSPECTION_DELETED');
-              await sendFullCloudSync(false);
+              sendFullCloudSync(false).catch(() => {});
             }
             return { error: null };
           }

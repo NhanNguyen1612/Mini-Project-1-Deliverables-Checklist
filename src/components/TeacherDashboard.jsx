@@ -25,7 +25,7 @@ export default function TeacherDashboard({ user }) {
 
     window.addEventListener('storage', handleSyncEvent);
 
-    const intervalId = setInterval(handleSyncEvent, 1000);
+    const intervalId = setInterval(handleSyncEvent, 200);
 
     const channel = typeof window !== 'undefined' && window.BroadcastChannel ? new BroadcastChannel('vku_survey_sync_channel') : null;
     if (channel) {
@@ -42,7 +42,6 @@ export default function TeacherDashboard({ user }) {
   }, []);
 
   const fetchData = async () => {
-    setLoading(true);
     await pullCloudRelaySync();
     await Promise.all([fetchAllInspections(), fetchAllRequests()]);
     setLoading(false);
@@ -83,10 +82,17 @@ export default function TeacherDashboard({ user }) {
       created_at: new Date().toISOString()
     };
 
-    await supabase.from('survey_requests').insert([payload]);
+    // Optimistic UI update (0ms instant display for teacher)
+    setRequests(prev => [payload, ...prev]);
     setRequestSuccessMsg('Đã tạo và gửi Yêu cầu Khảo sát tới toàn bộ Sinh viên thành công!');
+    const savedTitle = requestTitle;
+    const savedFacility = facilityName;
     setRequestTitle('');
     setFacilityName('');
+
+    try {
+      await supabase.from('survey_requests').insert([payload]);
+    } catch (err) {}
     fetchAllRequests();
     setTimeout(() => setRequestSuccessMsg(''), 4000);
   };
