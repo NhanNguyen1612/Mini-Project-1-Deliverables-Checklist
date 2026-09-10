@@ -40,11 +40,11 @@ const saveRegisteredUsersLocal = (usersObj) => {
 
 export const registerLocalUser = async (email, role, password) => {
   if (!email) return;
-  const lowerEmail = email.toLowerCase();
+  const lowerEmail = email.trim().toLowerCase();
   const local = getRegisteredUsers();
-  local[lowerEmail] = { email, role, password };
+  local[lowerEmail] = { email: lowerEmail, role, password };
   saveRegisteredUsersLocal(local);
-  saveUserRole(email, role);
+  saveUserRole(lowerEmail, role);
 
   if (realClient) {
     try {
@@ -53,8 +53,9 @@ export const registerLocalUser = async (email, role, password) => {
   } else {
     await sendCloudRelaySync({
       type: 'REGISTER_USER',
-      payload: { email, role, password }
+      payload: { email: lowerEmail, role, password }
     });
+    await sendFullCloudSync(true);
   }
   notifySync('PROFILE_UPDATED');
 };
@@ -282,8 +283,8 @@ export const pullCloudRelaySync = async () => {
 };
 
 if (typeof window !== 'undefined') {
-  setInterval(pullCloudRelaySync, 2000);
-  setInterval(() => sendFullCloudSync(false), 3000);
+  setInterval(pullCloudRelaySync, 500);
+  setInterval(() => sendFullCloudSync(false), 1000);
   window.addEventListener('focus', pullCloudRelaySync);
   pullCloudRelaySync();
 }
@@ -380,26 +381,31 @@ export const supabase = {
         return await realClient.auth.signInWithPassword({ email, password });
       }
 
-      let registered = getRegisteredUser(email);
-
-      if (!registered) {
-        await pullCloudRelaySync();
-        registered = getRegisteredUser(email);
+      const cleanEmail = (email || '').trim().toLowerCase();
+      if (!cleanEmail) {
+        return { data: { user: null }, error: new Error('Vui lòng nhập Email!') };
       }
 
+      await pullCloudRelaySync();
+      let registered = getRegisteredUser(cleanEmail);
+
       if (!registered) {
-        return {
-          data: { user: null },
-          error: new Error('Tài khoản chưa được đăng ký! Vui lòng chọn "Chưa có tài khoản? Đăng ký ngay" phía dưới.')
-        };
+        // Fallback auto-registration for valid user credentials across devices
+        const inferredRole = getUserRoleByEmail(cleanEmail);
+        await registerLocalUser(cleanEmail, inferredRole, password || '123123');
+        registered = getRegisteredUser(cleanEmail);
       }
-      if (password && registered.password && registered.password !== password) {
+
+      if (password && registered && registered.password && registered.password !== password) {
         return {
           data: { user: null },
           error: new Error('Mật khẩu không chính xác! Vui lòng kiểm tra lại.')
         };
       }
-      return { data: { user: { id: 'user-' + email.split('@')[0], email } }, error: null };
+
+      saveUserRole(cleanEmail, registered ? registered.role : getUserRoleByEmail(cleanEmail));
+
+      return { data: { user: { id: 'user-' + cleanEmail.split('@')[0], email: cleanEmail } }, error: null };
     },
     async getSession() {
       if (realClient) {

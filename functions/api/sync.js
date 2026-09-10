@@ -42,21 +42,23 @@ async function getStore(env) {
     } catch (e) {}
   }
 
-  // Persistent keyval store sync across edge isolates
-  try {
-    const res = await fetch(KEYVAL_URL);
-    if (res.ok) {
-      const json = await res.json();
-      if (json && json.val) {
-        const parsed = JSON.parse(json.val);
-        if (parsed && (Array.isArray(parsed.survey_requests) || Array.isArray(parsed.inspections))) {
-          memoryStore.survey_requests = mergeArrays(parsed.survey_requests || [], memoryStore.survey_requests);
-          memoryStore.inspections = mergeArrays(parsed.inspections || [], memoryStore.inspections);
-          memoryStore.users = mergeUsers(parsed.users || {}, memoryStore.users);
+  // Persistent keyval store sync across edge isolates (only fetch if memoryStore is empty)
+  if (memoryStore.survey_requests.length === 0 && memoryStore.inspections.length === 0) {
+    try {
+      const res = await fetch(KEYVAL_URL);
+      if (res.ok) {
+        const json = await res.json();
+        if (json && json.val) {
+          const parsed = JSON.parse(json.val);
+          if (parsed && (Array.isArray(parsed.survey_requests) || Array.isArray(parsed.inspections))) {
+            memoryStore.survey_requests = mergeArrays(parsed.survey_requests || [], memoryStore.survey_requests);
+            memoryStore.inspections = mergeArrays(parsed.inspections || [], memoryStore.inspections);
+            memoryStore.users = mergeUsers(parsed.users || {}, memoryStore.users);
+          }
         }
       }
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
 
   return memoryStore;
 }
@@ -71,10 +73,10 @@ async function saveStore(env, store) {
     } catch (e) {}
   }
 
-  // Save to persistent keyval store across edge instances
+  // Non-blocking persistent keyval store save
   try {
     const encoded = encodeURIComponent(JSON.stringify(store));
-    await fetch(KEYVAL_SET_BASE + encoded);
+    fetch(KEYVAL_SET_BASE + encoded).catch(() => {});
   } catch (e) {}
 }
 
